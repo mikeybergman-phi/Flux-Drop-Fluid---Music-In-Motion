@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FluxDrop · Fluid</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;background:#020308;color:#eee;font:13px system-ui,sans-serif}canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none}#panel{position:fixed;top:18px;left:18px;width:330px;max-width:calc(100vw - 36px);padding:20px;background:rgba(8,10,19,.82);border:1px solid #ffffff22;border-radius:18px;backdrop-filter:blur(18px);box-shadow:0 12px 60px #0006;max-height:calc(100vh - 36px);overflow:auto;transition:opacity .2s}#panel.hidden{display:none}.brand{font-size:22px;letter-spacing:-.8px;font-weight:600}.brand span{color:#84f4dc;font-weight:300}.sub{font-size:11px;color:#8e9aaf;margin:4px 0 18px;letter-spacing:1.3px;text-transform:uppercase}.row{display:flex;gap:7px;align-items:center;margin:9px 0}.row label{flex:1}button,.file,select{font:inherit;color:#e7ecf6;background:#ffffff0d;border:1px solid #ffffff1c;border-radius:8px;padding:9px;cursor:pointer}button:hover,.file:hover{background:#ffffff20}.file{display:block;text-align:center;flex:1}input[type=file]{display:none}select{width:100%}input[type=range]{width:100%;accent-color:#7be7d5}.control{margin:13px 0}.control label{display:flex;justify-content:space-between;font-size:12px;color:#bec8d8}.control output{color:#7be7d5;font-variant-numeric:tabular-nums}.small{font-size:11px;line-height:1.6;color:#929fb5}#status{color:#9fdecf;overflow-wrap:anywhere;margin-top:12px}#reveal{position:fixed;bottom:18px;right:18px;opacity:.55}#reveal:hover{opacity:1}.meters{display:flex;gap:4px;margin:12px 0}.meters i{height:3px;flex:1;background:#273143;border-radius:4px;overflow:hidden}.meters b{display:block;height:100%;width:0;background:#85e8d5}.keys{margin-top:12px;border-top:1px solid #ffffff18;padding-top:10px}.error{color:#ffb9b9!important}input[type=checkbox]{accent-color:#7be7d5}a{color:#9debdc}
+select{background:#172235;color:#fff;border-color:#71839c;font-size:14px;font-weight:600;color-scheme:dark}
+select option{background:#172235;color:#fff;font-size:14px}
+select:focus-visible{outline:2px solid #85e8d5;outline-offset:2px}
+#panel{background:rgba(8,10,19,.96)}
+.control label{color:#e5ecf6}.small{color:#bdc9dc}.sub{color:#bdc9dc}
+</style>
+</head>
+<body>
+<canvas id="canvas" aria-label="Interactive audio reactive fluid visualization"></canvas>
+<section id="panel">
+<div class="brand">FluxDrop <span>Fluid</span></div><div class="sub">Music in motion</div>
+<div class="row"><label class="file">Load music<input id="file" type="file" accept="audio/*"></label><button id="play">Play / pause</button></div>
+<div class="meters"><i><b id="bassMeter"></b></i><i><b id="midMeter"></b></i><i><b id="highMeter"></b></i></div>
+<select id="preset" aria-label="Flow preset"><option>Liquid Ink</option><option>Vortex Cathedral</option><option>Silk Currents</option><option>Chromatic Whirlpool</option><option>Electric Nebula</option><option>Color Bloom</option></select>
+<div class="control"><label for="colors">Color sources <output id="colorsValue"></output></label><input id="colors" type="range" min="4" max="18" step="1" value="10"></div>
+<div class="control"><label for="react">Audio force <output id="reactValue"></output></label><input id="react" type="range" min="0" max="3" step=".05" value="1.4"></div>
+<div class="control"><label for="curl">Turbulence <output id="curlValue"></output></label><input id="curl" type="range" min="0" max="24" step="1" value="24"></div>
+<div class="control"><label for="trail">Dye persistence <output id="trailValue"></output></label><input id="trail" type="range" min=".1" max="3" step=".05" value="1.9"></div>
+<div class="control"><label for="glow">Glow <output id="glowValue"></output></label><input id="glow" type="range" min="0" max="2" step=".05" value=".85"></div>
+<div class="control"><label for="beatSensitivity">Beat sensitivity <output id="beatSensitivityValue"></output></label><input id="beatSensitivity" type="range" min=".5" max="2.5" step=".05" value="1.35"></div>
+<div class="row"><label><input id="auto" type="checkbox" checked> Auto evolve</label></div>
+<div class="row"><label><input id="waves" type="checkbox" checked> Waveform ink</label><select id="quality" aria-label="Simulation quality" style="width:120px"><option value="128">Light</option><option value="192" selected>Balanced</option><option value="288">Detailed</option></select></div>
+<div class="row"><button id="next">Next flow</button><button id="reset">Clear</button><button id="full">Fullscreen</button></div>
+<div class="row"><button id="capture" style="width:100%">Save screenshot · PNG</button></div>
+<div id="status" class="small" role="status">Load music to stir the fluid with sound.</div>
+<div class="small keys">Drag to stir · Space: next flow · H: controls<br>F: fullscreen · W: waveform ink · P: save PNG</div>
+</section>
+<button id="reveal" aria-label="Show or hide controls">Controls · H</button>
+<audio id="audio"></audio>
+<script>
+'use strict';
+const $=id=>document.getElementById(id), canvas=$('canvas');
+const gl=canvas.getContext('webgl2',{alpha:false,antialias:false,depth:false,stencil:false,preserveDrawingBuffer:false});
+const status=(s,error=false)=>{$('status').textContent=s;$('status').classList.toggle('error',error)};
+if(!gl||!gl.getExtension('EXT_color_buffer_float')){
+ status('This fluid simulation needs WebGL 2 with floating-point rendering. Enable browser hardware acceleration and reopen the file.',true);
+ throw new Error('Floating point WebGL 2 unavailable');
+}
+gl.disable(gl.BLEND);gl.disable(gl.DEPTH_TEST);
+const vertex=`#version 300 es
+precision highp float;
+out vec2 uv;
+void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));uv=p;gl_Position=vec4(p*2.-1.,0.,1.);}`;
+const header=`#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 uv;
+out vec4 frag;
+uniform sampler2D tex,vel,other;
+uniform vec2 px;
+uniform float dt,decay,aspect;
+vec4 sampleLinear(sampler2D s,vec2 p){vec2 size=vec2(textureSize(s,0));vec2 q=p*size-.5;vec2 i=floor(q);vec2 f=fract(q);vec2 a=(i+.5)/size;return mix(mix(texture(s,a),texture(s,a+vec2(1./size.x,0)),f.x),mix(texture(s,a+vec2(0,1./size.y)),texture(s,a+1./size),f.x),f.y);}
+`;
+const shaders={
+musicStir:header+`uniform float time,energy;void main(){vec2 p=uv*vec2(aspect,1.);vec2 v=vec2(0);float k=15.;vec2 q=p*k+vec2(time*1.1,-time*.8);v+=vec2(sin(q.x)*cos(q.y),-cos(q.x)*sin(q.y));q=p*27.+vec2(-time*.7,time*1.3);v+=.45*vec2(sin(q.x)*cos(q.y),-cos(q.x)*sin(q.y));v.x/=aspect;frag=vec4(clamp(texture(vel,uv).xy+v*energy*dt*.85,vec2(-2.5),vec2(2.5)),0,1);}`,
+advect:header+`void main(){vec2 v=sampleLinear(vel,uv).xy;vec2 back=clamp(uv-dt*v,px*.5,1.-px*.5);frag=sampleLinear(tex,back)*exp(-decay*dt);}`,
+splat:header+`uniform vec2 point,force;uniform vec3 color;uniform float radius,isVelocity;void main(){vec2 p=uv-point;p.x*=aspect;float g=exp(-dot(p,p)/radius);vec4 base=texture(tex,uv);frag=base+g*vec4(mix(color,vec3(force,0),isVelocity),0);}`,
+curl:header+`void main(){float l=texture(vel,uv-vec2(px.x,0)).y,r=texture(vel,uv+vec2(px.x,0)).y,b=texture(vel,uv-vec2(0,px.y)).x,t=texture(vel,uv+vec2(0,px.y)).x;frag=vec4(.5*(r-l-t+b),0,0,1);}`,
+vorticity:header+`uniform float strength;void main(){float l=abs(texture(tex,uv-vec2(px.x,0)).x),r=abs(texture(tex,uv+vec2(px.x,0)).x),b=abs(texture(tex,uv-vec2(0,px.y)).x),t=abs(texture(tex,uv+vec2(0,px.y)).x),c=texture(tex,uv).x;vec2 n=.5*vec2(t-b,r-l);n/=length(n)+.0001;n.y=-n.y;vec2 v=texture(vel,uv).xy+dt*n*c*strength;v=clamp(v,vec2(-2.5),vec2(2.5));frag=vec4(v,0,1);}`,
+divergence:header+`void main(){vec2 c=texture(vel,uv).xy;float l=texture(vel,uv-vec2(px.x,0)).x,r=texture(vel,uv+vec2(px.x,0)).x,b=texture(vel,uv-vec2(0,px.y)).y,t=texture(vel,uv+vec2(0,px.y)).y;if(uv.x<px.x)l=-c.x;if(uv.x>1.-px.x)r=-c.x;if(uv.y<px.y)b=-c.y;if(uv.y>1.-px.y)t=-c.y;frag=vec4(.5*(r-l+t-b),0,0,1);}`,
+pressure:header+`void main(){float l=texture(tex,uv-vec2(px.x,0)).x,r=texture(tex,uv+vec2(px.x,0)).x,b=texture(tex,uv-vec2(0,px.y)).x,t=texture(tex,uv+vec2(0,px.y)).x;float d=texture(other,uv).x;frag=vec4((l+r+b+t-d)*.25,0,0,1);}`,
+project:header+`void main(){float l=texture(tex,uv-vec2(px.x,0)).x,r=texture(tex,uv+vec2(px.x,0)).x,b=texture(tex,uv-vec2(0,px.y)).x,t=texture(tex,uv+vec2(0,px.y)).x;vec2 v=texture(vel,uv).xy-vec2(r-l,t-b);if(uv.x<px.x||uv.x>1.-px.x)v.x=0.;if(uv.y<px.y||uv.y>1.-px.y)v.y=0.;frag=vec4(v,0,1);}`,
+display:header+`uniform float glow,zoom,spin,feedback;uniform sampler2D history;vec3 ink(vec2 p){return sampleLinear(tex,clamp(p,vec2(0),vec2(1))).rgb;}void main(){vec2 p=uv-.5;p.x*=aspect;float r=length(p);vec2 q=vec2(p.x/aspect,p.y)+.5;vec3 c=ink(q);vec2 d=px*5.;vec3 halo=(ink(q+vec2(d.x,0))+ink(q-vec2(d.x,0))+ink(q+vec2(0,d.y))+ink(q-vec2(0,d.y)))*.25;c+=halo*glow*.45;float edge=length(ink(q+px)-ink(q-px));c+=vec3(.3,.55,.65)*edge*.22;c=1.-exp(-c*1.15);vec2 h=(uv-.5)*zoom;float cs=cos(spin),sn=sin(spin);h=mat2(cs,-sn,sn,cs)*h+.5;vec3 old=texture(history,clamp(h,vec2(0),vec2(1))).rgb;c=mix(c,old,feedback);c*=1.-.32*smoothstep(.3,1.,r);frag=vec4(pow(max(c,vec3(0)),vec3(.9)),1);}`,
+copy:header+`void main(){frag=texture(tex,uv);}`
+};
+function compile(type,src){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;}
+const programs={};
+try{for(const [name,src] of Object.entries(shaders)){const p=gl.createProgram();gl.attachShader(p,compile(gl.VERTEX_SHADER,vertex));gl.attachShader(p,compile(gl.FRAGMENT_SHADER,src));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(p));const u={};for(let i=0;i<gl.getProgramParameter(p,gl.ACTIVE_UNIFORMS);i++){const n=gl.getActiveUniform(p,i).name;u[n]=gl.getUniformLocation(p,n);}programs[name]={p,u};}}catch(e){status('Could not start the fluid renderer: '+e.message,true);throw e;}
+const vao=gl.createVertexArray();gl.bindVertexArray(vao);
+function target(w,h,float=true){const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,float?gl.RGBA16F:gl.RGBA8,w,h,0,gl.RGBA,float?gl.HALF_FLOAT:gl.UNSIGNED_BYTE,null);const f=gl.createFramebuffer();gl.bindFramebuffer(gl.FRAMEBUFFER,f);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,tex,0);if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)throw new Error('Fluid framebuffer unavailable');gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);return {tex,f,w,h};}
+function pair(w,h,float=true){return {a:target(w,h,float),b:target(w,h,float),swap(){[this.a,this.b]=[this.b,this.a]}};}
+let velocity,dye,pressure,divergence,curl,history,resources=[],viewAspect=1;
+function dispose(){for(const t of resources){gl.deleteTexture(t.tex);gl.deleteFramebuffer(t.f);}resources=[];}
+function dims(n){return viewAspect>1?[Math.round(n*viewAspect),n]:[n,Math.round(n/viewAspect)];}
+function allocate(){dispose();viewAspect=canvas.width/canvas.height;const n=+$('quality').value,[w,h]=dims(n),[dw,dh]=dims(n*2);velocity=pair(w,h);dye=pair(dw,dh);pressure=pair(w,h);divergence=target(w,h);curl=target(w,h);history=pair(canvas.width,canvas.height,false);resources=[velocity.a,velocity.b,dye.a,dye.b,pressure.a,pressure.b,divergence,curl,history.a,history.b];}
+function resize(){const scale=Math.min(1,1440/Math.max(innerWidth,innerHeight));const w=Math.max(1,Math.round(innerWidth*scale)),h=Math.max(1,Math.round(innerHeight*scale));if(canvas.width!==w||canvas.height!==h){canvas.width=w;canvas.height=h;allocate();}}
+function draw(name,to,uniforms={},textures={}){const {p,u}=programs[name];gl.useProgram(p);gl.bindFramebuffer(gl.FRAMEBUFFER,to?to.f:null);gl.viewport(0,0,to?to.w:canvas.width,to?to.h:canvas.height);let unit=0;for(const [k,t]of Object.entries(textures)){gl.activeTexture(gl.TEXTURE0+unit);gl.bindTexture(gl.TEXTURE_2D,t.tex);if(u[k]!=null)gl.uniform1i(u[k],unit);unit++;}for(const [k,v]of Object.entries(uniforms)){if(u[k]==null)continue;if(Array.isArray(v)){if(v.length===2)gl.uniform2f(u[k],...v);else if(v.length===3)gl.uniform3f(u[k],...v);}else gl.uniform1f(u[k],v);}gl.drawArrays(gl.TRIANGLES,0,3);}
+function splat(x,y,vx,vy,color,r=.00065){draw('splat',velocity.b,{point:[x,y],force:[vx,vy],color:[0,0,0],radius:r,aspect:viewAspect,isVelocity:1},{tex:velocity.a});velocity.swap();draw('splat',dye.b,{point:[x,y],force:[0,0],color,radius:r,aspect:viewAspect,isVelocity:0},{tex:dye.a});dye.swap();}
+function step(dt){draw('musicStir',velocity.b,{dt,time:elapsed,aspect:viewAspect,energy:+$('curl').value/28},{vel:velocity.a});velocity.swap();const px=[1/velocity.a.w,1/velocity.a.h];draw('advect',velocity.b,{px,dt,decay:.22},{vel:velocity.a,tex:velocity.a});velocity.swap();draw('curl',curl,{px},{vel:velocity.a});draw('vorticity',velocity.b,{px,dt,strength:+$('curl').value},{tex:curl,vel:velocity.a});velocity.swap();draw('divergence',divergence,{px},{vel:velocity.a});for(const t of [pressure.a,pressure.b]){gl.bindFramebuffer(gl.FRAMEBUFFER,t.f);gl.clear(gl.COLOR_BUFFER_BIT);}for(let i=0;i<18;i++){draw('pressure',pressure.b,{px},{tex:pressure.a,other:divergence});pressure.swap();}draw('project',velocity.b,{px},{tex:pressure.a,vel:velocity.a});velocity.swap();draw('advect',dye.b,{px:[1/dye.a.w,1/dye.a.h],dt,decay:1/(+$('trail').value*3)},{tex:dye.a,vel:velocity.a});dye.swap();}
+
+// One reusable music source feeds both the analyzer and the speakers.
+let audioCtx,analyser,bins,wave,elementSource,inputSource,url;
+const audio=$('audio');
+async function audioReady(){if(!audioCtx){audioCtx=new AudioContext();analyser=audioCtx.createAnalyser();analyser.fftSize=2048;analyser.smoothingTimeConstant=.25;bins=new Uint8Array(analyser.frequencyBinCount);wave=new Uint8Array(analyser.fftSize);}await audioCtx.resume();}
+function disconnectInput(){previousSpectrum=null;Object.assign(detector,new BeatDetector());if(inputSource){inputSource.disconnect(analyser);inputSource=null;}audio.pause();}
+function errorText(e){status(e.name==='NotAllowedError'?'Playback could not start. Press Play to try again.':e.message,true);}
+$('file').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{await audioReady();disconnectInput();if(url)URL.revokeObjectURL(url);url=URL.createObjectURL(f);audio.src=url;if(!elementSource){elementSource=audioCtx.createMediaElementSource(audio);elementSource.connect(audioCtx.destination);}elementSource.connect(analyser);inputSource=elementSource;await audio.play();status('Playing · '+f.name);}catch(e){errorText(e);}};
+$('play').onclick=async()=>{try{if(!audio.src){status('Load a music file first.');return;}await audioReady();if(audio.paused){await audio.play();status('Playing · '+$('file').files[0]?.name);}else{audio.pause();status('Music paused · fluid continues drifting.');}}catch(e){errorText(e);}};
+audio.onended=()=>status('Track ended · press Play or load another track.');audio.onerror=()=>status('This audio file could not be played. Try MP3, WAV, or another browser-supported format.',true);
+function band(lo,hi){const n=bins.length,ny=audioCtx.sampleRate/2;let sum=0,count=0;for(let i=Math.max(1,Math.floor(lo/ny*n));i<Math.min(n,Math.ceil(hi/ny*n));i++){sum+=bins[i]/255;count++;}return count?sum/count:0;}
+let bass=0,mid=0,high=0,average=.1,pulse=0,lastBeat=-1,beatCount=0;
+// Track positive spectral changes, rather than requiring bass to exceed its own average.
+// Pick one onset peak and rearm only after that attack has fallen away.
+class BeatDetector{
+ constructor(){this.mean=.003;this.variance=.00001;this.previous=0;this.before=0;this.last=-10;this.armed=true;this.peak=0;}
+ update(flux,level,t,dt,sensitivity){
+  const threshold=Math.max(.0025,(this.mean+Math.sqrt(this.variance)*.35)/sensitivity);
+  if(flux<this.peak*.5||flux<threshold*.65)this.armed=true;
+  const hit=this.armed&&this.previous>this.before&&this.previous>=flux&&this.previous>threshold&&level>.025&&t-this.last>.12;
+  if(hit){this.last=t;this.armed=false;this.peak=this.previous;}
+  const k=1-Math.exp(-dt/1.6),difference=flux-this.mean;
+  this.mean+=difference*k;this.variance+=(difference*difference-this.variance)*k;
+  this.before=this.previous;this.previous=flux;
+  return hit;
+ }
+}
+const detector=new BeatDetector();let previousSpectrum=null;
+function sound(t,dt){
+ let b=0,m=0,h=0,flux=0;
+ if(analyser){
+  analyser.getByteFrequencyData(bins);analyser.getByteTimeDomainData(wave);
+  b=band(35,180);m=band(180,2400);h=band(2400,14000);
+  if(!previousSpectrum)previousSpectrum=new Float32Array(bins.length);
+  let low=0,body=0,air=0,nLow=0,nBody=0,nAir=0;
+  const hz=audioCtx.sampleRate/analyser.fftSize;
+  for(let i=1;i<bins.length;i++){
+   const frequency=i*hz,value=bins[i]/255,rise=Math.max(0,value-previousSpectrum[i]);previousSpectrum[i]=value;
+   if(frequency<220){low+=rise;nLow++;}
+   else if(frequency<3200){body+=rise;nBody++;}
+   else if(frequency<14000){air+=rise;nAir++;}
+  }
+  flux=.5*low/Math.max(1,nLow)+.4*body/Math.max(1,nBody)+.1*air/Math.max(1,nAir);
+ }
+ const s=1-Math.exp(-dt*14);bass+=(b-bass)*s;mid+=(m-mid)*s;high+=(h-high)*s;
+ average+=(b-average)*(1-Math.exp(-dt*.8));
+ if(detector.update(flux,Math.max(b,m,h),t,dt,+$('beatSensitivity').value)){
+  pulse=1;lastBeat=t;beatCount++;
+ }
+ pulse*=Math.exp(-dt*4);
+ $('bassMeter').style.width=(bass*100)+'%';$('midMeter').style.width=(mid*100)+'%';$('highMeter').style.width=(high*100)+'%';
+}
+const configs=[{orbit:.25,speed:.21,force:.24,hue:.53},{orbit:.3,speed:-.17,force:.46,hue:.72},{orbit:.32,speed:.1,force:.16,hue:.08},{orbit:.22,speed:.28,force:.52,hue:.92},{orbit:.33,speed:-.13,force:.34,hue:.6},{orbit:.25,speed:.13,force:.24,hue:.37}];
+let current=0,from={...configs[0]},transitionTime=-10,lastSwitch=0;
+function configAt(t){let a=Math.min(1,Math.max(0,(t-transitionTime)/4));a=a*a*(3-2*a);const c={};for(const k of Object.keys(from))c[k]=from[k]+(configs[current][k]-from[k])*a;return c;}
+function next(index=(current+1)%configs.length){const t=performance.now()/1000;from=configAt(t);current=index;transitionTime=t;lastSwitch=t;$('preset').selectedIndex=index;}
+$('preset').onchange=()=>next($('preset').selectedIndex);$('next').onclick=()=>next();$('quality').onchange=()=>{allocate();};$('reset').onclick=()=>allocate();
+for(const id of ['react','curl','trail','glow','beatSensitivity','colors']){const update=()=>$(id+'Value').textContent=id==='trail'?Number($(id).value).toFixed(1)+'×':Number($(id).value).toFixed(id==='curl'||id==='colors'?0:1);$(id).oninput=update;update();}
+function palette(h){h=((h%1)+1)%1;return [5,3,1].map(n=>{const k=(n+h*6)%6;return .06+.94*(1-Math.max(0,Math.min(k,4-k,1)));});}
+let emitClock=0;
+function emit(t,dt,c){emitClock+=dt;if(emitClock<1/45)return;const tick=Math.min(.06,emitClock);emitClock=0;const count=+$('colors').value,react=+$('react').value,throb=Math.min(1.5,bass*react*.8+pulse*react*.35),amp=(.065+bass*.4+mid*.13)*(1+throb*.25)*Math.sqrt(6/count)*tick*45;for(let i=0;i<count;i++){const a=t*c.speed+i/count*Math.PI*2;const radius=c.orbit+.035*Math.sin(t*.47+i*2);const x=.5+Math.cos(a)*radius/viewAspect,y=.5+Math.sin(a)*radius;const color=palette(c.hue+i/count+t*.015).map(v=>v*amp);const force=(c.force*(.35+bass*react*2)+pulse*react*.22)*tick*45;const wobble=Math.sin(t*1.7+i*2)*.7;splat(x,y,-Math.sin(a+wobble)*force/viewAspect,Math.cos(a+wobble)*force,color,(.00035+high*.0012)*(1+throb*.65));}
+if($('waves').checked){for(let i=0;i<12;i++){const x=.15+i/11*.7;const sample=wave?(wave[Math.floor(i/11*(wave.length-1))]-128)/128:0;const y=.5+sample*.18;const color=palette(c.hue+.25+t*.02).map(v=>v*(.006+bass*.065)*tick*45);splat(x,y,Math.sin(t+i)*mid*.025,(sample*.055)*react,color,.000025);}}
+}
+const pointers=new Map();
+canvas.onpointerdown=e=>{canvas.setPointerCapture(e.pointerId);pointers.set(e.pointerId,{x:e.clientX/innerWidth,y:1-e.clientY/innerHeight});};canvas.onpointermove=e=>{const old=pointers.get(e.pointerId);if(!old)return;const x=e.clientX/innerWidth,y=1-e.clientY/innerHeight;splat(x,y,(x-old.x)*25,(y-old.y)*25,palette(performance.now()*.0001).map(v=>v*.4),.001);pointers.set(e.pointerId,{x,y});};canvas.onpointerup=canvas.onpointercancel=e=>pointers.delete(e.pointerId);
+function toggleUI(){$('panel').classList.toggle('hidden');}$('reveal').onclick=toggleUI;
+async function fullscreen(){try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch(e){status('Fullscreen is unavailable in this preview. Open the downloaded HTML in a browser.');}}$('full').onclick=fullscreen;
+addEventListener('keydown',e=>{if(e.target.matches('input,select,button'))return;const k=e.key.toLowerCase();if(e.code==='Space'){e.preventDefault();next();}if(k==='h')toggleUI();if(k==='f')fullscreen();if(k==='w')$('waves').click();if(k==='p')capturePNG();});
+function capturePNG(){
+ try{
+  const w=history.a.w,h=history.a.h,pixels=new Uint8Array(w*h*4);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,history.a.f);
+  gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+  const imageCanvas=document.createElement('canvas');imageCanvas.width=w;imageCanvas.height=h;
+  const ctx=imageCanvas.getContext('2d'),image=ctx.createImageData(w,h),row=w*4;
+  for(let y=0;y<h;y++)image.data.set(pixels.subarray((h-1-y)*row,(h-y)*row),y*row);
+  ctx.putImageData(image,0,0);
+  imageCanvas.toBlob(blob=>{
+   if(!blob){status('Could not create the PNG. Try again.',true);return;}
+   const link=document.createElement('a'),url=URL.createObjectURL(blob);
+   link.href=url;link.download='FluxDrop-'+new Date().toISOString().replace(/[:.]/g,'-')+'.png';
+   document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),2000);
+   status('Screenshot saved · '+w+' × '+h+' PNG');
+  },'image/png');
+ }catch(e){status('Could not capture the image: '+e.message,true);}
+}
+$('capture').onclick=capturePNG;
+canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();status('Graphics context was lost. Reload the file to restart.',true);});
+resize();if(!velocity)allocate();
+let last=performance.now()/1000,elapsed=0;
+function frame(ms){if(gl.isContextLost())return;try{resize();const t=ms/1000,dt=Math.min(1/30,Math.max(.001,t-last));last=t;elapsed+=dt;sound(t,dt);if($('auto').checked&&t-lastSwitch>26&&(pulse>.65||t-lastSwitch>34))next((current+1+Math.floor(Math.random()*5))%6);const c=configAt(t);emit(t,dt,c);step(dt);draw('display',history.b,{px:[1/dye.a.w,1/dye.a.h],aspect:viewAspect,glow:+$('glow').value,zoom:1.+.003*bass,spin:.0008*c.speed*(1+bass),feedback:.32},{tex:dye.a,history:history.a});history.swap();draw('copy',null,{}, {tex:history.a});requestAnimationFrame(frame);}catch(e){status('Renderer stopped: '+e.message,true);console.error(e);}}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
